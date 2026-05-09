@@ -1,9 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, Circle, Activity, Loader2, Flame, Filter } from 'lucide-react';
+import { CheckCircle2, Circle, Activity, Loader2, Flame, Filter, Calendar } from 'lucide-react';
 import { ReadinessInput } from './components/ReadinessInput';
+import { ProfileSettings } from './components/ProfileSettings';
+import { VolumeProgressionChart, type VolumeTrendPoint } from './components/VolumeProgressionChart';
 import { apiFetch, API_BASE_URL, refreshAccessToken } from './lib/api';
 
 type Exercise = { id: string; name: string; target_sets: number; target_reps: number; history: string; };
@@ -70,6 +73,13 @@ export default function Home() {
   const [authName, setAuthName] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [profileWeight, setProfileWeight] = useState('');
+  const [profileTargetWeight, setProfileTargetWeight] = useState('');
+  const [profileBodyFat, setProfileBodyFat] = useState('');
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [workout, setWorkout] = useState<WorkoutData | null>(null);
   const [volume, setVolume] = useState<VolumeData>({ Chest: 0, Back: 0, Legs: 0 });
@@ -89,6 +99,13 @@ export default function Home() {
   const [nutritionFat, setNutritionFat] = useState<number>(0);
   const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [nutritionLoading, setNutritionLoading] = useState(false);
+  const [volumeTrend, setVolumeTrend] = useState<VolumeTrendPoint[]>([]);
+  const [volumeTrendError, setVolumeTrendError] = useState<string | null>(null);
+  const [volumeTrendLoading, setVolumeTrendLoading] = useState(false);
+  const [sessionDate, setSessionDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [sessionHistory, setSessionHistory] = useState<any[]>([]);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
 
   const muscleGroups = [
     { id: 'chest', label: 'Chest (Push)', emoji: '🏋️' },
@@ -96,6 +113,7 @@ export default function Home() {
     { id: 'legs', label: 'Legs', emoji: '🦵' },
     { id: 'shoulders', label: 'Shoulders', emoji: '🎯' },
   ];
+
 
   useEffect(() => {
     const bootstrapAuth = async () => {
@@ -229,6 +247,21 @@ export default function Home() {
 
   useEffect(() => {
     if (!accessToken) return;
+    fetchProfile();
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    fetchVolumeTrend();
+  }, [selectedMuscleGroup, accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    fetchSessionHistory(sessionDate);
+  }, [accessToken, sessionDate]);
+
+  useEffect(() => {
+    if (!accessToken) return;
     const today = new Date().toISOString().split('T')[0];
     fetchNutritionSummary(today);
   }, [accessToken]);
@@ -326,6 +359,174 @@ export default function Home() {
     setReadinessError(null);
   };
 
+  async function fetchProfile() {
+    if (!accessToken) return;
+    setProfileLoading(true);
+    try {
+      const response = await apiFetch(
+        '/api/v1/auth/me',
+        { cache: 'no-store' },
+        accessToken,
+        setAccessToken,
+      );
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to load profile');
+      }
+
+      const data = await response.json();
+      setProfile(data);
+      if (data.body_weight_kg !== undefined && data.body_weight_kg !== null) {
+        setProfileWeight(String(data.body_weight_kg));
+      } else {
+        setProfileWeight('');
+      }
+      if (data.target_body_weight_kg !== undefined && data.target_body_weight_kg !== null) {
+        setProfileTargetWeight(String(data.target_body_weight_kg));
+      } else {
+        setProfileTargetWeight('');
+      }
+      if (data.body_fat_percentage !== undefined && data.body_fat_percentage !== null) {
+        setProfileBodyFat(String(data.body_fat_percentage));
+      } else {
+        setProfileBodyFat('');
+      }
+      setProfileError(null);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Failed to load profile');
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  async function saveProfile() {
+    if (!accessToken) return;
+    const updates: Record<string, number> = {};
+
+    if (profileWeight.trim() !== '') {
+      const parsedWeight = Number(profileWeight);
+      if (!Number.isFinite(parsedWeight) || parsedWeight <= 0) {
+        setProfileError('Body weight must be a positive number');
+        return;
+      }
+      updates.body_weight_kg = parsedWeight;
+    }
+
+    if (profileTargetWeight.trim() !== '') {
+      const parsedTarget = Number(profileTargetWeight);
+      if (!Number.isFinite(parsedTarget) || parsedTarget <= 0) {
+        setProfileError('Target body weight must be a positive number');
+        return;
+      }
+      updates.target_body_weight_kg = parsedTarget;
+    }
+
+    if (profileBodyFat.trim() !== '') {
+      const parsedBodyFat = Number(profileBodyFat);
+      if (!Number.isFinite(parsedBodyFat) || parsedBodyFat < 0 || parsedBodyFat > 100) {
+        setProfileError('Body fat percentage must be between 0 and 100');
+        return;
+      }
+      updates.body_fat_percentage = parsedBodyFat;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      setProfileError('Enter at least one value to update');
+      return;
+    }
+
+    setProfileSaving(true);
+    setProfileError(null);
+
+    try {
+      const response = await apiFetch(
+        '/api/v1/auth/me',
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates),
+          cache: 'no-store',
+        },
+        accessToken,
+        setAccessToken,
+      );
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to update profile');
+      }
+
+      const data = await response.json();
+      setProfile(data);
+      setProfileWeight(String(data.body_weight_kg ?? profileWeight));
+      setProfileTargetWeight(String(data.target_body_weight_kg ?? profileTargetWeight));
+      setProfileBodyFat(String(data.body_fat_percentage ?? profileBodyFat));
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Failed to update profile');
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function fetchVolumeTrend() {
+    if (!accessToken) return;
+    setVolumeTrendLoading(true);
+    setVolumeTrendError(null);
+
+    try {
+      const response = await apiFetch(
+        '/api/v1/analytics/volume-progression?muscle_group=all&weeks=12',
+        { cache: 'no-store' },
+        accessToken,
+        setAccessToken,
+      );
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to load volume trend');
+      }
+
+      const data = await response.json();
+      const mapped = Array.isArray(data)
+        ? data.map((entry: any) => ({
+          week_start: entry.week_start,
+          chest: Number(entry.chest || 0),
+          back: Number(entry.back || 0),
+          legs: Number(entry.legs || 0),
+        }))
+        : [];
+      setVolumeTrend(mapped);
+    } catch (error) {
+      setVolumeTrendError(error instanceof Error ? error.message : 'Failed to load volume trend');
+    } finally {
+      setVolumeTrendLoading(false);
+    }
+  }
+
+  async function fetchSessionHistory(date: string) {
+    if (!accessToken) return;
+    setSessionLoading(true);
+    setSessionError(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/v1/sessions/${date}`,
+        { cache: 'no-store' },
+        accessToken,
+        setAccessToken,
+      );
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to load sessions');
+      }
+
+      const data = await response.json();
+      setSessionHistory(Array.isArray(data.sessions) ? data.sessions : []);
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : 'Failed to load sessions');
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
   async function fetchNutritionSummary(date: string) {
     if (!accessToken) return;
 
@@ -404,6 +605,16 @@ export default function Home() {
       setAccessToken(null);
       setWorkout(null);
       setVolume({ Chest: 0, Back: 0, Legs: 0 });
+      setProfile(null);
+      setProfileWeight('');
+      setProfileTargetWeight('');
+      setProfileBodyFat('');
+      setProgressSummary(null);
+      setNutritionSummary(null);
+      setVolumeTrend([]);
+      setSessionHistory([]);
+      setSessionError(null);
+      setVolumeTrendError(null);
     }
   };
 
@@ -544,6 +755,20 @@ export default function Home() {
           </div>
         </header>
 
+        <ProfileSettings
+          profile={profile}
+          bodyWeight={profileWeight}
+          targetBodyWeight={profileTargetWeight}
+          bodyFatPercentage={profileBodyFat}
+          loading={profileLoading}
+          saving={profileSaving}
+          error={profileError}
+          onBodyWeightChange={setProfileWeight}
+          onTargetBodyWeightChange={setProfileTargetWeight}
+          onBodyFatPercentageChange={setProfileBodyFat}
+          onSave={saveProfile}
+        />
+
         {/* Muscle Group Selector */}
         <motion.section
           initial={{ opacity: 0, y: 20 }}
@@ -593,6 +818,17 @@ export default function Home() {
             <VolumeRing label="Chest" currentSets={volume.Chest || 0} targetSets={10} colorClass="text-[#FF3B30]" strokeColor="#FF3B30" />
             <VolumeRing label="Back" currentSets={volume.Back || 0} targetSets={10} colorClass="text-[#0071E3]" strokeColor="#0071E3" />
             <VolumeRing label="Legs" currentSets={volume.Legs || 0} targetSets={10} colorClass="text-[#34C759]" strokeColor="#34C759" />
+          </div>
+          <div className="mt-8">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold tracking-tight">12-Week Volume Trend</h3>
+              <span className="text-xs text-[#86868B] font-semibold uppercase tracking-wider">All muscle groups</span>
+            </div>
+            <VolumeProgressionChart
+              data={volumeTrend}
+              loading={volumeTrendLoading}
+              error={volumeTrendError}
+            />
           </div>
         </section>
 
@@ -712,6 +948,75 @@ export default function Home() {
             </div>
           ) : (
             <p className="text-sm text-[#86868B]">No nutrition logs yet today.</p>
+          )}
+        </section>
+
+        {/* Session History */}
+        <section className="bg-white rounded-[32px] p-8 mb-10 shadow-[0_2px_20px_rgba(0,0,0,0.04)]">
+          <div className="flex items-center space-x-2 mb-6">
+            <Calendar className="w-5 h-5 text-[#007AFF]" />
+            <h2 className="text-lg font-bold tracking-tight">Session History</h2>
+          </div>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs text-[#86868B] font-semibold uppercase tracking-wider">Daily snapshot</p>
+            <Link
+              href={`/history/${sessionDate}`}
+              className="text-xs font-semibold text-[#007AFF] hover:text-[#0051D5]"
+            >
+              View full details
+            </Link>
+          </div>
+          <div className="flex items-center space-x-3 mb-4">
+            <input
+              type="date"
+              value={sessionDate}
+              onChange={(e) => setSessionDate(e.target.value)}
+              className="px-4 py-2 border border-[#E5E5EA] rounded-xl focus:outline-none focus:border-[#007AFF]"
+            />
+            <button
+              onClick={() => fetchSessionHistory(sessionDate)}
+              disabled={sessionLoading}
+              className="px-4 py-2 bg-[#007AFF] hover:bg-[#0051D5] disabled:bg-[#C7C7CC] text-white text-sm font-semibold rounded-xl transition-colors"
+            >
+              {sessionLoading ? 'Loading...' : 'Load'}
+            </button>
+          </div>
+
+          {sessionError && (
+            <p className="text-sm text-[#FF3B30] font-medium mb-3">{sessionError}</p>
+          )}
+
+          {sessionHistory.length === 0 ? (
+            <p className="text-sm text-[#86868B]">No sessions logged for this date.</p>
+          ) : (
+            <div className="space-y-4">
+              {sessionHistory.map((session) => (
+                <div key={session.session_id} className="border border-[#E5E5EA] rounded-2xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-[#1D1D1F]">{session.muscle_group}</p>
+                      <p className="text-xs text-[#86868B]">Readiness {session.readiness_score ?? '-'}</p>
+                    </div>
+                    <span className="text-xs text-[#86868B]">{session.session_date}</span>
+                  </div>
+
+                  {session.sets && session.sets.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {session.sets.map((set: any) => (
+                        <div key={set.id} className="flex items-center justify-between text-sm">
+                          <span className="font-semibold text-[#1D1D1F]">{set.exercise?.name || 'Exercise'}</span>
+                          <span className="text-[#86868B]">
+                            {Math.round(set.weight_kg || 0)}kg × {set.reps_completed} (RPE {set.rpe})
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[#86868B] mt-3">No sets logged.</p>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </section>
 
