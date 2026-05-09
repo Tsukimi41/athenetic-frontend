@@ -6,63 +6,34 @@ import { Clock, AlertCircle, Zap, CheckCircle2, Loader2 } from 'lucide-react';
 
 interface ReadinessInputProps {
   onSubmit?: (data: {
+    sleep_hours: number;
+    muscle_soreness: number;
+    running_km_prior_day: number;
+  }) => void;
+  response?: {
     readiness_score: number;
     deload_factor: number;
     deload_target_sets: number;
     recommendation: string;
-  }) => void;
+  } | null;
+  loading?: boolean;
+  error?: string | null;
+  onReset?: () => void;
 }
 
-export function ReadinessInput({ onSubmit }: ReadinessInputProps) {
+export function ReadinessInput({ onSubmit, response, loading, error, onReset }: ReadinessInputProps) {
   const [sleepHours, setSleepHours] = useState<number>(7.5);
   const [muscleSoreness, setMuscleSoreness] = useState<number>(3);
   const [runningKm, setRunningKm] = useState<number>(0);
-  const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    try {
-      // Format today's date as ISO string
-      const today = new Date().toISOString().split('T')[0];
-
-      const res = await fetch('http://localhost:8080/api/v1/readiness', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          input_date: today,
-          sleep_hours: sleepHours,
-          muscle_soreness: muscleSoreness,
-          running_km_prior_day: runningKm,
-        }),
-        cache: 'no-store',
+    if (onSubmit) {
+      onSubmit({
+        sleep_hours: sleepHours,
+        muscle_soreness: muscleSoreness,
+        running_km_prior_day: runningKm,
       });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Failed to submit readiness');
-      }
-
-      const data = await res.json();
-      setResponse(data);
-
-      // Call parent callback
-      if (onSubmit) {
-        onSubmit({
-          readiness_score: data.readiness_score,
-          deload_factor: data.deload_factor,
-          deload_target_sets: data.deload_target_sets,
-          recommendation: data.recommendation,
-        });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -123,7 +94,7 @@ export function ReadinessInput({ onSubmit }: ReadinessInputProps) {
           </p>
 
           <button
-            onClick={() => setResponse(null)}
+            onClick={() => onReset && onReset()}
             className="w-full mt-6 px-4 py-2 bg-[#F5F5F7] hover:bg-[#E8E8ED] text-[#1D1D1F] font-semibold rounded-xl transition-colors"
           >
             Update Readiness
